@@ -302,6 +302,21 @@
         let draggedItemIndex = null;
         let selectedLayerIdsForMerge = new Set(); // Adicionado rastreador de camadas mescladas
 
+        // Variáveis de Controle de Estado e Tela (CORREÇÃO APLICADA)
+        let globalDrawMode = 'hachura';
+        const drawModes = ['hachura', 'contorno', 'completo'];
+        const drawModeLabels = { hachura: 'Hachura', contorno: 'Contorno', completo: 'Hach. + Cont.' };
+        
+        let screenW = 1080;
+        let screenH = 1920;
+        let svgNativeW = 1000;
+        let svgNativeH = 1000;
+        let svgScale = 1;
+        let svgOffsetX = 0;
+        let svgOffsetY = 0;
+        let currentSvgElement = null;
+        let flipYAxis = false;
+
         const colorDictionary = [
             { name: 'Preto', rgb: [0, 0, 0] }, { name: 'Branco', rgb: [255, 255, 255] },
             { name: 'Vermelho', rgb: [255, 0, 0] }, { name: 'Verde', rgb: [0, 255, 0] },
