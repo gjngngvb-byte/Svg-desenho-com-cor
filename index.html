@@ -1,0 +1,904 @@
+```html
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Uny Automaton - Layer Extractor</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --surface-color: #1e1e1e;
+            --surface-alt: #2a2a2a;
+            --primary-color: #bb86fc;
+            --primary-hover: #9965f4;
+            --text-primary: #e1e1e1;
+            --text-secondary: #a0a0a0;
+            --border-color: #333333;
+            --success-color: #03dac6;
+            --warning-color: #ffb86c;
+            --info-color: #8be9fd;
+            --error-color: #cf6679;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+
+        body {
+            background-color: var(--bg-color); color: var(--text-primary);
+            line-height: 1.6; padding: 15px; display: flex; flex-direction: column;
+            align-items: center; min-height: 100vh;
+        }
+
+        .container {
+            width: 100%; max-width: 1200px; background-color: var(--surface-color);
+            border-radius: 12px; padding: 20px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+        }
+
+        h1 { text-align: center; color: var(--primary-color); margin-bottom: 5px; font-size: 1.5rem; }
+        p.subtitle { text-align: center; color: var(--text-secondary); margin-bottom: 20px; font-size: 0.85rem; }
+
+        .main-grid { display: grid; grid-template-columns: 1fr; gap: 20px; }
+        @media (min-width: 900px) { .main-grid { grid-template-columns: 1fr 1fr; } }
+
+        .panel { background-color: var(--surface-alt); border: 1px solid var(--border-color); border-radius: 8px; padding: 15px; }
+        .panel h2 { font-size: 1.1rem; margin-bottom: 12px; color: var(--primary-color); border-bottom: 1px solid var(--border-color); padding-bottom: 8px; }
+
+        .drop-zone {
+            width: 100%; background-color: #222; border: 2px dashed var(--border-color);
+            border-radius: 8px; display: flex; flex-direction: column; justify-content: center;
+            align-items: center; color: var(--text-secondary); cursor: pointer;
+            transition: all 0.3s ease; text-align: center; padding: 25px 15px; margin-bottom: 15px;
+        }
+        .drop-zone:hover, .drop-zone.dragover { border-color: var(--primary-color); background-color: rgba(187, 134, 252, 0.05); color: var(--primary-color); }
+
+        .workspace-controls {
+            display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px;
+            background: #222; padding: 10px; border-radius: 6px; align-items: center; justify-content: space-between;
+        }
+
+        .control-group { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; }
+        .control-group input[type="number"] {
+            width: 70px; background: var(--bg-color); border: 1px solid var(--border-color);
+            color: white; padding: 5px; border-radius: 4px; text-align: center;
+        }
+        .control-group input[type="range"] { flex-grow: 1; accent-color: var(--primary-color); }
+        
+        .checkbox-group { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; cursor: pointer; background: rgba(255,255,255,0.05); padding: 5px 10px; border-radius: 4px; }
+
+        .screen-wrapper {
+            width: 100%; height: 60vh; max-height: 800px;
+            display: flex; justify-content: center; align-items: center;
+            background-image: linear-gradient(45deg, #181818 25%, transparent 25%), linear-gradient(-45deg, #181818 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #181818 75%), linear-gradient(-45deg, transparent 75%, #181818 75%);
+            background-size: 20px 20px; background-position: 0 0, 0 10px, 10px -10px, -10px 0px; background-color: transparent;
+            border: 2px solid var(--border-color); border-radius: 8px; position: relative; overflow: hidden;
+            cursor: grab; touch-action: none; margin: 0 auto;
+        }
+        .screen-wrapper:active { cursor: grabbing; }
+
+        /* Borda visível adicionada para limitar visualmente a área da tela inserida */
+        #fast-preview-canvas { 
+            max-width: 100%; max-height: 100%; 
+            object-fit: contain; 
+            background-color: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            box-shadow: 0 0 20px rgba(0,0,0,0.6);
+        }
+        
+        #hidden-svg-dom { position: absolute; opacity: 0.001; pointer-events: none; z-index: -1; }
+
+        .layers-list {
+            list-style: none; display: flex; flex-direction: column; gap: 8px;
+            margin-bottom: 15px; max-height: 450px; overflow-y: auto; padding-right: 5px;
+        }
+        .layers-list::-webkit-scrollbar { width: 6px; }
+        .layers-list::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
+
+        .layer-item {
+            background-color: #222; border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 10px;
+            display: flex; align-items: center; gap: 8px; transition: all 0.2s; flex-wrap: wrap;
+        }
+        .layer-item.dragging { opacity: 0.5; background-color: #333; }
+        .layer-item.drag-over { border-top: 2px solid var(--primary-color); }
+        .layer-item.hidden-layer { opacity: 0.4; filter: grayscale(100%); }
+
+        .drag-handle { color: var(--text-secondary); font-size: 1.1rem; cursor: grab; padding: 0 5px; }
+        .layer-order { background-color: var(--border-color); width: 24px; height: 24px; border-radius: 50%; display: flex; justify-content: center; align-items: center; font-size: 0.75rem; font-weight: bold; flex-shrink: 0; }
+        .color-swatch { width: 24px; height: 24px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.2); flex-shrink: 0; }
+        
+        .layer-details { flex-grow: 1; display: flex; flex-direction: column; gap: 2px; min-width: 100px; }
+        .layer-name-input { background: var(--bg-color); border: 1px solid var(--border-color); color: white; padding: 3px 6px; border-radius: 4px; font-size: 0.85rem; width: 100%; font-weight: bold; }
+        .layer-name-input:focus { border-color: var(--primary-color); outline: none; }
+        .layer-stats { font-size: 0.7rem; color: var(--text-secondary); }
+
+        .layer-action-btns { display: flex; gap: 4px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+        .layer-btn {
+            background: rgba(255,255,255,0.08); border: none; color: var(--text-secondary); cursor: pointer;
+            height: 28px; border-radius: 5px; display: flex; align-items: center; justify-content: center;
+            transition: all 0.2s; font-size: 0.8rem; padding: 0 8px;
+        }
+        .layer-btn:hover { background: rgba(255,255,255,0.2); color: white; }
+        .layer-btn.icon-only { width: 28px; padding: 0; }
+        
+        .layer-mode-toggle { font-weight: bold; width: 95px; font-size: 0.75rem; border: 1px solid rgba(255,255,255,0.1); }
+        .mode-hachura { color: var(--success-color); background: rgba(3, 218, 198, 0.1); }
+        .mode-contorno { color: var(--warning-color); background: rgba(255, 184, 108, 0.1); }
+        .mode-completo { color: var(--info-color); background: rgba(139, 233, 253, 0.1); }
+
+        .btn-toggle-active { color: var(--success-color); }
+        .btn-download-single { color: var(--primary-color); }
+        .btn-download-single:hover { background: rgba(187, 134, 252, 0.2); color: white; }
+
+        .btn {
+            background-color: var(--primary-color); color: #000; border: none; border-radius: 6px;
+            padding: 12px 20px; font-size: 1rem; font-weight: bold; cursor: pointer;
+            transition: all 0.2s ease; display: inline-flex; justify-content: center; align-items: center;
+            gap: 8px; width: 100%; box-shadow: 0 4px 10px rgba(187, 134, 252, 0.3);
+        }
+        .btn:hover:not(:disabled) { background-color: var(--primary-hover); transform: translateY(-2px); }
+        .btn:disabled { background-color: var(--border-color); color: var(--text-secondary); cursor: not-allowed; transform: none; box-shadow: none; }
+        .btn-success { background-color: var(--success-color); box-shadow: 0 4px 10px rgba(3, 218, 198, 0.3); }
+
+        #progress-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85); z-index: 2000; display: none;
+            flex-direction: column; justify-content: center; align-items: center; color: white;
+        }
+        .progress-box { background: var(--surface-color); padding: 25px; border-radius: 10px; width: 90%; max-width: 380px; text-align: center; border: 1px solid var(--border-color); }
+        .progress-bar-container { width: 100%; height: 16px; background: #222; border-radius: 8px; margin: 15px 0; overflow: hidden; border: 1px solid #444; }
+        .progress-bar-fill { height: 100%; background: var(--success-color); width: 0%; transition: width 0.1s linear; }
+
+        #notification {
+            position: fixed; bottom: 20px; right: 20px; background-color: var(--success-color);
+            color: #000; padding: 12px 20px; border-radius: 6px; font-weight: bold; font-size: 0.9rem;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4); transform: translateY(150%); transition: transform 0.3s ease; z-index: 1000;
+        }
+        #notification.show { transform: translateY(0); }
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Uny Automaton</h1>
+        <p class="subtitle">Extrator Vetorial P/ Auto.js 6</p>
+
+        <div class="main-grid">
+            <!-- Left Column: Input and Workspace -->
+            <div class="panel">
+                <h2>1. Importar e Posicionar SVG</h2>
+                
+                <div id="drop-zone" class="drop-zone">
+                    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 8px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                    <p>Clique ou arraste um arquivo <b>.svg</b> aqui</p>
+                    <input type="file" id="svg-file-input" accept=".svg" hidden>
+                </div>
+
+                <div id="workspace-panel" class="hidden">
+                    <div class="workspace-controls">
+                        <div class="control-group">
+                            <label>Tela (L x A):</label>
+                            <input type="number" id="screen-w" value="1080">
+                            <input type="number" id="screen-h" value="1920">
+                        </div>
+                        <label class="checkbox-group" title="Inverter Eixo Y se o desenho estiver de cabeça para baixo">
+                            <input type="checkbox" id="flip-y"> Inverter Y
+                        </label>
+                    </div>
+                    <div class="workspace-controls">
+                        <div class="control-group" style="width: 100%;">
+                            <label>Escala (Zoom):</label>
+                            <input type="range" id="svg-scale" min="0.1" max="20" step="0.1" value="1">
+                            <span id="scale-val" style="min-width: 45px; text-align: right;">1.0x</span>
+                        </div>
+                    </div>
+                    
+                    <div class="screen-wrapper" id="screen-wrapper">
+                        <canvas id="fast-preview-canvas"></canvas>
+                        <div id="hidden-svg-dom"></div>
+                    </div>
+                    <p style="text-align: center; font-size: 0.8rem; color: var(--text-secondary); margin-top: 8px;">
+                        A borda delimita o limite real da tela. Arraste livremente para reposicionar. O zoom cresce a partir do centro.
+                    </p>
+                </div>
+            </div>
+
+            <!-- Right Column: Layers and Export -->
+            <div class="panel">
+                <h2>2. Camadas, Ordem e Baixar Script</h2>
+                
+                <div id="empty-layers-msg" style="text-align: center; color: var(--text-secondary); padding: 35px 0;">
+                    Carregue um SVG para visualizar as camadas.
+                </div>
+
+                <div id="layers-content" class="hidden">
+                    <div class="workspace-controls" style="justify-content: space-between;">
+                        <button id="btn-global-mode" class="layer-btn mode-hachura" style="font-weight: bold; width: auto; padding: 5px 12px; border: 1px solid var(--border-color);">
+                            Todos: Hachura
+                        </button>
+                        <div class="control-group">
+                            <label>Hachura:</label>
+                            <input type="number" id="resolution" value="1" min="1" max="30" title="Distância entre linhas de preenchimento (1 a 30). Menor = Mais detalhes.">
+                        </div>
+                    </div>
+                    
+                    <div class="workspace-controls" style="justify-content: flex-end; padding: 5px 10px; margin-top: -5px;">
+                        <label class="checkbox-group" title="Tocar um som de notificação no celular quando o Auto.js terminar de desenhar a camada">
+                            <input type="checkbox" id="play-sound-autojs" checked> Som/Toast no Fim (Auto.js)
+                        </label>
+                    </div>
+
+                    <ul id="layers-list" class="layers-list">
+                        <!-- Itens gerados via JS -->
+                    </ul>
+
+                    <button id="btn-generate" class="btn btn-success">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        Baixar Todas em ZIP (.zip)
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="progress-overlay">
+        <div class="progress-box">
+            <h3 style="color: var(--success-color); margin-bottom: 8px; font-size: 1.1rem;">Gerando Scripts...</h3>
+            <p id="progress-text" style="font-size: 0.85rem; color: var(--text-secondary);">Calculando coordenadas matemáticas...</p>
+            <div class="progress-bar-container">
+                <div id="progress-fill" class="progress-bar-fill"></div>
+            </div>
+            <p style="font-size: 0.75rem; color: #888;">Otimizado para Auto.js 6 (Anti-Crash Ativo).</p>
+        </div>
+    </div>
+
+    <div id="notification">Operação concluída!</div>
+
+    <script>
+        let extractedLayers = []; 
+        let draggedItemIndex = null;
+        let currentSvgElement = null;
+        let svgNativeW = 1000;
+        let svgNativeH = 1000;
+        
+        let screenW = 1080;
+        let screenH = 1920;
+        let svgOffsetX = 0;
+        let svgOffsetY = 0;
+        let svgScale = 1;
+        let flipYAxis = false;
+        
+        const drawModes = ['hachura', 'contorno', 'completo'];
+        const drawModeLabels = { 'hachura': 'Hachura', 'contorno': 'Contorno', 'completo': 'Completo (H+C)' };
+        let globalDrawMode = 'hachura';
+
+        const colorDictionary = [
+            { name: 'Preto', rgb: [0, 0, 0] }, { name: 'Branco', rgb: [255, 255, 255] },
+            { name: 'Vermelho', rgb: [255, 0, 0] }, { name: 'Verde', rgb: [0, 255, 0] },
+            { name: 'Azul', rgb: [0, 0, 255] }, { name: 'Amarelo', rgb: [255, 255, 0] },
+            { name: 'Ciano', rgb: [0, 255, 255] }, { name: 'Magenta', rgb: [255, 0, 255] },
+            { name: 'Laranja', rgb: [255, 165, 0] }, { name: 'Rosa', rgb: [255, 192, 203] },
+            { name: 'Roxo', rgb: [128, 0, 128] }, { name: 'Marrom', rgb: [139, 69, 19] },
+            { name: 'Cinza', rgb: [128, 128, 128] }, { name: 'Dourado', rgb: [255, 215, 0] },
+            { name: 'Bege', rgb: [245, 245, 220] }, { name: 'Salmao', rgb: [250, 128, 114] },
+            { name: 'Verde Lima', rgb: [50, 205, 50] }, { name: 'Azul Claro', rgb: [173, 216, 230] }
+        ];
+
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('svg-file-input');
+        const workspacePanel = document.getElementById('workspace-panel');
+        const screenWrapper = document.getElementById('screen-wrapper');
+        const fastPreviewCanvas = document.getElementById('fast-preview-canvas');
+        const hiddenSvgDom = document.getElementById('hidden-svg-dom');
+        
+        const inputScreenW = document.getElementById('screen-w');
+        const inputScreenH = document.getElementById('screen-h');
+        const inputSvgScale = document.getElementById('svg-scale');
+        const textScaleVal = document.getElementById('scale-val');
+        const inputFlipY = document.getElementById('flip-y');
+        const checkPlaySound = document.getElementById('play-sound-autojs');
+
+        const emptyLayersMsg = document.getElementById('empty-layers-msg');
+        const layersContent = document.getElementById('layers-content');
+        const layersList = document.getElementById('layers-list');
+        const btnGenerate = document.getElementById('btn-generate');
+        const resolutionInput = document.getElementById('resolution');
+        const btnGlobalMode = document.getElementById('btn-global-mode');
+
+        dropZone.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', handleFileSelect);
+        dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault(); dropZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length) { fileInput.files = e.dataTransfer.files; handleFileSelect(); }
+        });
+
+        function handleFileSelect() {
+            const file = fileInput.files[0];
+            if (!file || !file.name.toLowerCase().endsWith('.svg')) {
+                alert("Por favor, selecione um arquivo .svg válido."); return;
+            }
+            const reader = new FileReader();
+            reader.onload = (e) => processSVGFile(e.target.result, file.name);
+            reader.readAsText(file);
+        }
+
+        function processSVGFile(svgString, filename) {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(svgString, "image/svg+xml");
+            const svgEl = doc.querySelector("svg");
+            
+            if (!svgEl) { alert("Nenhuma tag <svg> encontrada."); return; }
+
+            let vb = svgEl.viewBox.baseVal;
+            if (vb && vb.width > 0 && vb.height > 0) {
+                svgNativeW = vb.width; svgNativeH = vb.height;
+            } else {
+                svgNativeW = parseFloat(svgEl.getAttribute('width')) || 1000;
+                svgNativeH = parseFloat(svgEl.getAttribute('height')) || 1000;
+                svgEl.setAttribute('viewBox', `0 0 ${svgNativeW} ${svgNativeH}`);
+            }
+
+            svgEl.setAttribute('width', svgNativeW + 'px');
+            svgEl.setAttribute('height', svgNativeH + 'px');
+            svgEl.style.position = 'static';
+
+            const paths = Array.from(svgEl.querySelectorAll("path, polygon, rect, circle, ellipse, line, polyline"));
+            if (paths.length === 0) { alert("Nenhuma forma vetorial encontrada."); return; }
+
+            hiddenSvgDom.innerHTML = '';
+            hiddenSvgDom.appendChild(svgEl);
+            currentSvgElement = svgEl;
+
+            const colorGroups = {};
+            
+            paths.forEach((path) => {
+                const computed = window.getComputedStyle(path);
+                let color = computed.fill;
+                
+                if (!color || color === 'none' || color === 'rgba(0, 0, 0, 0)') { color = computed.stroke; }
+                if (!color || color === 'none' || color === 'rgba(0, 0, 0, 0)') color = "#000000";
+                
+                color = color.trim().toLowerCase();
+                if (color === 'none' || color === 'transparent') return;
+                
+                if (!colorGroups[color]) colorGroups[color] = [];
+                colorGroups[color].push(path);
+            });
+
+            extractedLayers = Object.keys(colorGroups).map((color, index) => ({
+                id: 'layer_' + Date.now() + '_' + index,
+                color: color,
+                colorName: getColorName(color),
+                paths: colorGroups[color],
+                visible: true,
+                drawMode: globalDrawMode 
+            }));
+
+            dropZone.innerHTML = `<p style="color: var(--success-color); font-weight: bold;">✓ ${filename} carregado</p><p style="font-size: 0.8em;">Clique para trocar</p>`;
+            
+            initWorkspace();
+            renderLayersList();
+            
+            workspacePanel.classList.remove('hidden');
+            emptyLayersMsg.classList.add('hidden');
+            layersContent.classList.remove('hidden');
+        }
+
+        function getRGBArray(colorStr) {
+            const temp = document.createElement('div');
+            temp.style.color = colorStr; document.body.appendChild(temp);
+            const c = window.getComputedStyle(temp).color; document.body.removeChild(temp);
+            const m = c.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+            if (m) return [parseInt(m[1]), parseInt(m[2]), parseInt(m[3])];
+            return [0, 0, 0];
+        }
+
+        function getColorName(colorStr) {
+            const rgb = getRGBArray(colorStr);
+            let minDist = Infinity, closestName = 'Cor';
+            for (let c of colorDictionary) {
+                const dist = Math.sqrt(Math.pow(rgb[0]-c.rgb[0], 2) + Math.pow(rgb[1]-c.rgb[1], 2) + Math.pow(rgb[2]-c.rgb[2], 2));
+                if (dist < minDist) { minDist = dist; closestName = c.name; }
+            }
+            return closestName;
+        }
+
+        function initWorkspace() {
+            updateScreenDimensions();
+            if (!currentSvgElement) return;
+
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            const paths = currentSvgElement.querySelectorAll("path, polygon, rect, circle, ellipse, line, polyline");
+            
+            paths.forEach(path => {
+                try {
+                    const b = path.getBBox();
+                    if (b && b.width > 0 && b.height > 0) {
+                        minX = Math.min(minX, b.x); minY = Math.min(minY, b.y);
+                        maxX = Math.max(maxX, b.x + b.width); maxY = Math.max(maxY, b.y + b.height);
+                    }
+                } catch(e) {}
+            });
+
+            if (minX === Infinity || maxX <= minX) { minX = 0; minY = 0; maxX = svgNativeW; maxY = svgNativeH; }
+
+            let drawW = maxX - minX; let drawH = maxY - minY;
+            if (drawW <= 1) drawW = svgNativeW; if (drawH <= 1) drawH = svgNativeH;
+            
+            const scaleX = (screenW * 0.80) / drawW;
+            const scaleY = (screenH * 0.80) / drawH;
+            let autoScale = Math.min(scaleX, scaleY);
+            
+            autoScale = Math.max(0.1, Math.min(20, autoScale));
+            
+            svgScale = parseFloat(autoScale.toFixed(2));
+            inputSvgScale.value = svgScale;
+            textScaleVal.textContent = svgScale.toFixed(1) + 'x';
+            
+            const centerX = minX + (drawW / 2);
+            const centerY = minY + (drawH / 2);
+            svgOffsetX = (screenW / 2) - (centerX * svgScale);
+            svgOffsetY = (screenH / 2) - (centerY * svgScale);
+            
+            requestAnimationFrame(drawFastPreview);
+        }
+
+        function updateScreenDimensions() {
+            screenW = parseInt(inputScreenW.value) || 1080;
+            screenH = parseInt(inputScreenH.value) || 1920;
+            
+            fastPreviewCanvas.width = screenW; 
+            fastPreviewCanvas.height = screenH;
+            fastPreviewCanvas.style.aspectRatio = `${screenW} / ${screenH}`;
+            
+            if (currentSvgElement) requestAnimationFrame(drawFastPreview);
+        }
+
+        inputScreenW.addEventListener('change', updateScreenDimensions);
+        inputScreenH.addEventListener('change', updateScreenDimensions);
+        window.addEventListener('resize', updateScreenDimensions);
+        inputFlipY.addEventListener('change', () => { flipYAxis = inputFlipY.checked; drawFastPreview(); });
+
+        btnGlobalMode.addEventListener('click', (e) => {
+            const nextIdx = (drawModes.indexOf(globalDrawMode) + 1) % drawModes.length;
+            globalDrawMode = drawModes[nextIdx];
+            
+            e.target.textContent = `Todos: ${drawModeLabels[globalDrawMode]}`;
+            e.target.className = `layer-btn mode-${globalDrawMode}`;
+            extractedLayers.forEach(l => l.drawMode = globalDrawMode);
+            renderLayersList();
+            drawFastPreview();
+        });
+
+        inputSvgScale.addEventListener('input', (e) => {
+            const oldScale = svgScale;
+            svgScale = parseFloat(e.target.value);
+            textScaleVal.textContent = svgScale.toFixed(1) + 'x';
+            
+            const cx = screenW / 2; const cy = screenH / 2;
+            svgOffsetX = cx - ((cx - svgOffsetX) / oldScale) * svgScale;
+            svgOffsetY = cy - ((cy - svgOffsetY) / oldScale) * svgScale;
+            
+            requestAnimationFrame(drawFastPreview);
+        });
+
+        let isDragging = false;
+        let startX, startY, initialOffsetX, initialOffsetY;
+
+        function startDrag(clientX, clientY) {
+            isDragging = true; startX = clientX; startY = clientY;
+            initialOffsetX = svgOffsetX; initialOffsetY = svgOffsetY;
+        }
+
+        function doDrag(clientX, clientY) {
+            if (!isDragging) return;
+            const rect = fastPreviewCanvas.getBoundingClientRect();
+            // A matemática do arrasto agora considera a proporção de redimensionamento do próprio Canvas
+            const scaleFactorX = screenW / rect.width;
+            const scaleFactorY = screenH / rect.height;
+            const dx = (clientX - startX) * scaleFactorX;
+            const dy = (clientY - startY) * scaleFactorY;
+            svgOffsetX = initialOffsetX + dx;
+            svgOffsetY = initialOffsetY + dy;
+            requestAnimationFrame(drawFastPreview);
+        }
+
+        function endDrag() { isDragging = false; }
+
+        screenWrapper.addEventListener('mousedown', (e) => startDrag(e.clientX, e.clientY));
+        window.addEventListener('mousemove', (e) => doDrag(e.clientX, e.clientY));
+        window.addEventListener('mouseup', endDrag);
+
+        screenWrapper.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 1) { e.preventDefault(); startDrag(e.touches[0].clientX, e.touches[0].clientY); }
+        }, { passive: false });
+        window.addEventListener('touchmove', (e) => {
+            if (e.touches.length === 1 && isDragging) { e.preventDefault(); doDrag(e.touches[0].clientX, e.touches[0].clientY); }
+        }, { passive: false });
+        window.addEventListener('touchend', endDrag);
+
+        function renderLayersList() {
+            layersList.innerHTML = '';
+            extractedLayers.forEach((layer, index) => {
+                const li = document.createElement('li');
+                li.className = `layer-item ${layer.visible ? '' : 'hidden-layer'}`;
+                li.draggable = true; li.dataset.index = index;
+
+                const bgColor = layer.color !== '' ? layer.color : '#000000';
+                const eyeClass = layer.visible ? 'btn-toggle-active' : '';
+                const eyeIcon = layer.visible ? 
+                    `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>` : 
+                    `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>`;
+
+                const modeText = drawModeLabels[layer.drawMode];
+                const modeClass = `mode-${layer.drawMode}`;
+
+                li.innerHTML = `
+                    <div class="drag-handle" title="Arraste para mover">⋮⋮</div>
+                    <div class="layer-order">${index + 1}</div>
+                    <div class="color-swatch" style="background-color: ${bgColor};"></div>
+                    <div class="layer-details">
+                        <input type="text" class="layer-name-input" value="${layer.colorName}" data-index="${index}" title="Renomeie a cor (altera o nome no arquivo/ZIP)">
+                        <div class="layer-stats">${layer.paths.length} vetor(es)</div>
+                    </div>
+                    <div class="layer-action-btns">
+                        <button class="layer-btn layer-mode-toggle ${modeClass}" data-index="${index}" title="Modo de Desenho (Hachura/Contorno/Ambos)">
+                            ${modeText}
+                        </button>
+                        <button class="layer-btn icon-only btn-download-single" data-index="${index}" title="Baixar apenas esta camada (.js)">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        </button>
+                        <button class="layer-btn icon-only btn-move-up" data-index="${index}" title="Mover para cima" ${index === 0 ? 'disabled style="opacity:0.3;cursor:not-allowed;"' : ''}>▲</button>
+                        <button class="layer-btn icon-only btn-move-down" data-index="${index}" title="Mover para baixo" ${index === extractedLayers.length - 1 ? 'disabled style="opacity:0.3;cursor:not-allowed;"' : ''}>▼</button>
+                        <button class="layer-btn icon-only layer-toggle-btn ${eyeClass}" title="Ocultar/Exibir">${eyeIcon}</button>
+                    </div>
+                `;
+
+                li.querySelector('.layer-name-input').addEventListener('input', (e) => { extractedLayers[index].colorName = e.target.value; });
+                
+                li.querySelector('.layer-mode-toggle').addEventListener('click', () => {
+                    const l = extractedLayers[index];
+                    const nextIdx = (drawModes.indexOf(l.drawMode) + 1) % drawModes.length;
+                    l.drawMode = drawModes[nextIdx];
+                    renderLayersList(); drawFastPreview();
+                });
+
+                li.querySelector('.layer-toggle-btn').addEventListener('click', () => {
+                    extractedLayers[index].visible = !extractedLayers[index].visible;
+                    renderLayersList(); drawFastPreview();
+                });
+
+                li.querySelector('.btn-download-single').addEventListener('click', (e) => { e.stopPropagation(); downloadSingleLayer(index); });
+
+                li.querySelector('.btn-move-up').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    if (index > 0) {
+                        const temp = extractedLayers[index]; extractedLayers[index] = extractedLayers[index - 1]; extractedLayers[index - 1] = temp;
+                        renderLayersList(); drawFastPreview();
+                    }
+                });
+
+                li.querySelector('.btn-move-down').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    if (index < extractedLayers.length - 1) {
+                        const temp = extractedLayers[index]; extractedLayers[index] = extractedLayers[index + 1]; extractedLayers[index + 1] = temp;
+                        renderLayersList(); drawFastPreview();
+                    }
+                });
+
+                li.addEventListener('dragstart', function(e) {
+                    draggedItemIndex = parseInt(this.dataset.index); e.dataTransfer.effectAllowed = 'move';
+                    setTimeout(() => this.classList.add('dragging'), 0);
+                });
+                li.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; });
+                li.addEventListener('dragenter', function(e) { e.preventDefault(); if (this.dataset.index != draggedItemIndex) this.classList.add('drag-over'); });
+                li.addEventListener('dragleave', function() { this.classList.remove('drag-over'); });
+                li.addEventListener('drop', function(e) {
+                    e.stopPropagation(); this.classList.remove('drag-over');
+                    const dropIndex = parseInt(this.dataset.index);
+                    if (draggedItemIndex === dropIndex) return false;
+                    const draggedItem = extractedLayers.splice(draggedItemIndex, 1)[0];
+                    extractedLayers.splice(dropIndex, 0, draggedItem);
+                    renderLayersList(); drawFastPreview(); return false;
+                });
+                li.addEventListener('dragend', function() { this.classList.remove('dragging'); document.querySelectorAll('.layer-item').forEach(item => item.classList.remove('drag-over')); });
+
+                layersList.appendChild(li);
+            });
+        }
+
+        function drawFastPreview() {
+            if (!currentSvgElement) return;
+            const ctx = fastPreviewCanvas.getContext('2d');
+            ctx.clearRect(0, 0, screenW, screenH);
+            ctx.save();
+            
+            if (flipYAxis) { ctx.translate(0, screenH); ctx.scale(1, -1); }
+            ctx.translate(svgOffsetX, svgOffsetY);
+            ctx.scale(svgScale, svgScale);
+
+            extractedLayers.forEach(layer => {
+                if (!layer.visible) return;
+                
+                ctx.fillStyle = layer.color;
+                ctx.strokeStyle = layer.color;
+                ctx.lineWidth = 1 / svgScale; 
+                
+                const doHachura = (layer.drawMode === 'hachura' || layer.drawMode === 'completo');
+                const doContorno = (layer.drawMode === 'contorno' || layer.drawMode === 'completo');
+                
+                layer.paths.forEach(path => {
+                    const d = path.getAttribute('d');
+                    if (!d) return;
+                    try {
+                        const p2d = new Path2D(d);
+                        const ctm = path.getCTM();
+                        if (ctm) {
+                            ctx.save();
+                            ctx.transform(ctm.a, ctm.b, ctm.c, ctm.d, ctm.e, ctm.f);
+                            if (doHachura) ctx.fill(p2d, 'evenodd');
+                            if (doContorno) ctx.stroke(p2d);
+                            ctx.restore();
+                        }
+                    } catch(err) {}
+                });
+            });
+            ctx.restore();
+        }
+
+        async function buildLayerScriptContent(layer, order, resolution) {
+            let scriptContent = `// Uny Automaton - Layer Extractor\n`;
+            scriptContent += `// Tela: ${screenW}x${screenH} | Escala: ${svgScale}x\n`;
+            scriptContent += `// Camada ${order}: ${layer.colorName} (${layer.color}) | Modo: ${drawModeLabels[layer.drawMode]}\n\n`;
+            scriptContent += `toastLog("Iniciando camada ${order}: ${layer.colorName} [${drawModeLabels[layer.drawMode]}]");\n\n`;
+
+            const doHachura = (layer.drawMode === 'hachura' || layer.drawMode === 'completo');
+            const doContorno = (layer.drawMode === 'contorno' || layer.drawMode === 'completo');
+            const playSound = checkPlaySound.checked;
+
+            // Motor 1: HACHURA (Preenchimento)
+            if (doHachura) {
+                if (layer.drawMode === 'completo') scriptContent += `// --- 1. PREENCHIMENTO (HACHURA) ---\n`;
+                
+                const offCanvas = document.createElement('canvas');
+                offCanvas.width = Math.round(svgNativeW);
+                offCanvas.height = Math.round(svgNativeH);
+                const offCtx = offCanvas.getContext('2d');
+                const svgNS = "http://www.w3.org/2000/svg";
+                const tempSvg = document.createElementNS(svgNS, 'svg');
+
+                for (let j = 0; j < layer.paths.length; j++) {
+                    const path = layer.paths[j];
+                    const d = path.getAttribute('d');
+                    if (!d) continue;
+
+                    let bBox; try { bBox = path.getBBox(); } catch(e) { continue; }
+                    if (!bBox || bBox.width <= 0 || bBox.height <= 0) continue;
+
+                    const ctm = path.getCTM(); if (!ctm) continue;
+
+                    offCtx.clearRect(0, 0, offCanvas.width, offCanvas.height);
+                    const p2d = new Path2D(d);
+                    offCtx.save();
+                    offCtx.transform(ctm.a, ctm.b, ctm.c, ctm.d, ctm.e, ctm.f);
+                    offCtx.fill(p2d, 'evenodd'); 
+                    offCtx.restore();
+
+                    const stepY = resolution * 1.5;
+                    const stepX = resolution;
+                    let scanningRight = true;
+
+                    for (let y = bBox.y; y <= bBox.y + bBox.height; y += stepY) {
+                        let rowSegments = [];
+                        let inSegment = false; let segStart = null;
+
+                        for (let x = bBox.x; x <= bBox.x + bBox.width; x += stepX) {
+                            const px = Math.floor(x); const py = Math.floor(y);
+                            if (px < 0 || py < 0 || px >= offCanvas.width || py >= offCanvas.height) continue;
+
+                            const pixel = offCtx.getImageData(px, py, 1, 1).data;
+                            const isInside = pixel[3] > 10; 
+
+                            if (isInside && !inSegment) { inSegment = true; segStart = x; } 
+                            else if (!isInside && inSegment) { inSegment = false; rowSegments.push({ start: segStart, end: x - stepX }); }
+                        }
+                        if (inSegment) { rowSegments.push({ start: segStart, end: bBox.x + bBox.width }); }
+
+                        if (rowSegments.length > 0) {
+                            if (!scanningRight) rowSegments.reverse();
+
+                            rowSegments.forEach(seg => {
+                                let ptsInLine = [];
+                                const xStart = scanningRight ? seg.start : seg.end;
+                                const xEnd = scanningRight ? seg.end : seg.start;
+                                const xStepDir = scanningRight ? stepX : -stepX;
+
+                                for (let cx = xStart; scanningRight ? cx <= xEnd : cx >= xEnd; cx += xStepDir) {
+                                    let pt = tempSvg.createSVGPoint();
+                                    pt.x = cx; pt.y = y;
+                                    let svgPt = pt.matrixTransform(ctm);
+                                    let finalX = Math.round((svgPt.x * svgScale) + svgOffsetX);
+                                    let finalY = Math.round((svgPt.y * svgScale) + svgOffsetY);
+                                    if (flipYAxis) finalY = screenH - finalY;
+                                    ptsInLine.push(`[${finalX}, ${finalY}]`);
+                                }
+
+                                if (ptsInLine.length >= 2) {
+                                    let duration = Math.max(80, ptsInLine.length * 4);
+                                    scriptContent += `gesture(${duration}, ${ptsInLine.join(', ')});\n`;
+                                }
+                            });
+                            scanningRight = !scanningRight; 
+                        }
+                    }
+                    scriptContent += `sleep(15);\n\n`;
+                    if (j % 3 === 0) await new Promise(r => setTimeout(r, 10));
+                }
+            }
+
+            // Motor 2: CONTORNO (Linhas Precisas)
+            if (doContorno) {
+                if (layer.drawMode === 'completo') scriptContent += `// --- 2. CONTORNO EXTERNO ---\n`;
+                const stepLen = Math.max(1, resolution / 2.0); 
+                
+                for (let j = 0; j < layer.paths.length; j++) {
+                    const path = layer.paths[j];
+                    const ctm = path.getCTM();
+                    if (!ctm) continue;
+                    
+                    let totalLen = 0;
+                    try { totalLen = path.getTotalLength(); } catch(e) { continue; } 
+                    if (totalLen <= 0) continue;
+
+                    let ptsInLine = [];
+                    for (let l = 0; l <= totalLen; l += stepLen) {
+                        const pt = path.getPointAtLength(l);
+                        const svgPt = pt.matrixTransform(ctm);
+                        
+                        let finalX = Math.round((svgPt.x * svgScale) + svgOffsetX);
+                        let finalY = Math.round((svgPt.y * svgScale) + svgOffsetY);
+                        if (flipYAxis) finalY = screenH - finalY;
+                        ptsInLine.push(`[${finalX}, ${finalY}]`);
+                    }
+                    
+                    const lastPt = path.getPointAtLength(totalLen);
+                    const svgLast = lastPt.matrixTransform(ctm);
+                    let endX = Math.round((svgLast.x * svgScale) + svgOffsetX);
+                    let endY = Math.round((svgLast.y * svgScale) + svgOffsetY);
+                    if (flipYAxis) endY = screenH - endY;
+                    ptsInLine.push(`[${endX}, ${endY}]`);
+
+                    if (ptsInLine.length >= 2) {
+                        const CHUNK_SIZE = 400; 
+                        for (let c = 0; c < ptsInLine.length; c += CHUNK_SIZE) {
+                            let chunk = ptsInLine.slice(c, c + CHUNK_SIZE + 1);
+                            if (chunk.length >= 2) {
+                                let duration = Math.floor(Math.max(100, chunk.length * 10) * 0.2); 
+                                if (duration < Math.max(80, chunk.length * 5)) duration = Math.max(80, chunk.length * 5);
+                                scriptContent += `gesture(${duration}, ${chunk.join(', ')});\n`;
+                            }
+                        }
+                        scriptContent += `sleep(25);\n\n`;
+                    }
+                    if (j % 5 === 0) await new Promise(r => setTimeout(r, 5)); 
+                }
+            }
+
+            scriptContent += `toastLog("Camada ${order} concluída.");\n`;
+
+            if (playSound) {
+                scriptContent += `
+// Tocar Notificação Sonora Auto.js
+try {
+    var uri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION);
+    var rt = android.media.RingtoneManager.getRingtone(context, uri);
+    rt.play();
+    device.vibrate(300);
+} catch(e) {
+    console.error("Erro ao tocar som: " + e);
+}
+\n`;
+            }
+
+            return scriptContent;
+        }
+
+        async function downloadSingleLayer(index) {
+            const layer = extractedLayers[index]; if (!layer) return;
+            let resolution = parseFloat(resolutionInput.value) || 1; if (resolution < 1) resolution = 1;
+
+            document.getElementById('progress-overlay').style.display = 'flex';
+            document.getElementById('progress-text').textContent = `Gerando script de ${drawModeLabels[layer.drawMode]} para ${layer.colorName}...`;
+            document.getElementById('progress-fill').style.width = '50%';
+
+            try {
+                await new Promise(r => setTimeout(r, 40));
+                const scriptContent = await buildLayerScriptContent(layer, index + 1, resolution);
+
+                const blob = new Blob([scriptContent], { type: 'text/javascript;charset=utf-8' });
+                const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+                const safeColorName = layer.colorName.replace(/[^a-zA-Z0-9À-ÿ]/g, '_');
+                a.download = `${index + 1}_${safeColorName}.js`;
+                document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(a.href);
+
+                playSuccessBeep(); showNotification(`Camada "${layer.colorName}" baixada com sucesso!`);
+            } catch (error) {
+                console.error(error); alert("Erro ao gerar arquivo: " + error.message);
+            } finally {
+                document.getElementById('progress-overlay').style.display = 'none';
+            }
+        }
+
+        btnGenerate.addEventListener('click', async () => {
+            if (!currentSvgElement) return;
+            let resolution = parseFloat(resolutionInput.value) || 1; if (resolution < 1) resolution = 1;
+
+            document.getElementById('progress-overlay').style.display = 'flex';
+            const progressText = document.getElementById('progress-text');
+            const progressFill = document.getElementById('progress-fill');
+            btnGenerate.disabled = true;
+
+            try {
+                if (typeof JSZip === 'undefined') throw new Error("JSZip indisponível. Use o download unitário.");
+
+                const zip = new JSZip();
+                const visibleLayers = extractedLayers.filter(l => l.visible);
+                let totalLayers = visibleLayers.length;
+
+                if (totalLayers === 0) { alert("Nenhuma camada visível para exportar."); return; }
+
+                for (let i = 0; i < totalLayers; i++) {
+                    const layer = visibleLayers[i];
+                    const order = extractedLayers.indexOf(layer) + 1;
+                    
+                    progressText.textContent = `Processando camada ${order} (${layer.colorName})...`;
+                    progressFill.style.width = `${((i + 1) / totalLayers) * 100}%`;
+                    
+                    await new Promise(r => setTimeout(r, 40));
+                    const scriptContent = await buildLayerScriptContent(layer, order, resolution);
+                    const safeColorName = layer.colorName.replace(/[^a-zA-Z0-9À-ÿ]/g, '_');
+                    zip.file(`${order}_${safeColorName}.js`, scriptContent);
+                }
+
+                progressText.textContent = "Compactando ZIP...";
+                const content = await zip.generateAsync({type:"blob"});
+                
+                const a = document.createElement("a"); a.href = URL.createObjectURL(content);
+                a.download = "Uny_Automaton_Scripts.zip"; document.body.appendChild(a);
+                a.click(); document.body.removeChild(a); URL.revokeObjectURL(a.href);
+
+                playSuccessBeep(); showNotification("ZIP gerado e baixado com sucesso!");
+            } catch (error) {
+                console.error(error); alert("Erro ao gerar ZIP: " + error.message);
+            } finally {
+                document.getElementById('progress-overlay').style.display = 'none'; btnGenerate.disabled = false;
+            }
+        });
+
+        function playSuccessBeep() {
+            try {
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+                oscillator.type = 'sine';
+                oscillator.frequency.setValueAtTime(880, audioCtx.currentTime);
+                oscillator.frequency.exponentialRampToValueAtTime(1760, audioCtx.currentTime + 0.1);
+                gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+                gainNode.gain.linearRampToValueAtTime(0.3, audioCtx.currentTime + 0.05);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+                oscillator.connect(gainNode); gainNode.connect(audioCtx.destination);
+                oscillator.start(); oscillator.stop(audioCtx.currentTime + 0.5);
+            } catch (e) { console.warn("Audio API bloqueada."); }
+        }
+
+        function showNotification(message) {
+            const notif = document.getElementById('notification');
+            notif.textContent = message; notif.classList.add('show');
+            setTimeout(() => notif.classList.remove('show'), 4000);
+        }
+    </script>
+</body>
+</html>
+```
