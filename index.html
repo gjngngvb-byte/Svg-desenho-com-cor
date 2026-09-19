@@ -154,6 +154,32 @@
         }
         #notification.show { transform: translateY(0); }
         .hidden { display: none !important; }
+
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85); z-index: 3000; display: none;
+            justify-content: center; align-items: center; backdrop-filter: blur(4px);
+        }
+        .modal-content {
+            background: var(--surface-color); padding: 25px; border-radius: 12px;
+            border: 1px solid var(--border-color); width: 90%; max-width: 400px;
+            text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+        }
+        .color-choice-btn {
+            display: flex; align-items: center; gap: 12px; width: 100%;
+            background: var(--surface-alt); border: 1px solid var(--border-color);
+            padding: 12px 15px; border-radius: 8px; cursor: pointer; color: white; transition: all 0.2s;
+        }
+        .color-choice-btn:hover { border-color: var(--primary-color); background: rgba(187, 134, 252, 0.1); transform: translateY(-2px); }
+        .layer-checkbox { 
+            margin-right: 5px; cursor: pointer; width: 18px; height: 18px; 
+            accent-color: var(--primary-color); flex-shrink: 0;
+        }
+        .btn-merge-active {
+            background: rgba(187, 134, 252, 0.2) !important; color: white !important;
+            border: 1px solid var(--primary-color) !important; animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(187, 134, 252, 0.4); } 70% { box-shadow: 0 0 0 6px rgba(187, 134, 252, 0); } 100% { box-shadow: 0 0 0 0 rgba(187, 134, 252, 0); } }
     </style>
 </head>
 <body>
@@ -212,9 +238,14 @@
 
                 <div id="layers-content" class="hidden">
                     <div class="workspace-controls" style="justify-content: space-between;">
-                        <button id="btn-global-mode" class="layer-btn mode-hachura" style="font-weight: bold; width: auto; padding: 5px 12px; border: 1px solid var(--border-color);">
-                            Todos: Hachura
-                        </button>
+                        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                            <button id="btn-global-mode" class="layer-btn mode-hachura" style="font-weight: bold; width: auto; padding: 5px 12px; border: 1px solid var(--border-color);">
+                                Todos: Hachura
+                            </button>
+                            <button id="btn-merge-layers" class="layer-btn hidden" style="font-weight: bold; width: auto; padding: 5px 12px; border: 1px solid var(--primary-color); color: var(--primary-color);" title="Mesclar camadas selecionadas">
+                                Mesclar
+                            </button>
+                        </div>
                         <div class="control-group">
                             <label>Hachura:</label>
                             <input type="number" id="resolution" value="1" min="1" max="30" title="Distância entre linhas de preenchimento (1 a 30). Menor = Mais detalhes.">
@@ -251,25 +282,25 @@
         </div>
     </div>
 
+    <div id="merge-modal" class="modal-overlay">
+        <div class="modal-content">
+            <h3 style="color: var(--primary-color); margin-bottom: 10px; font-size: 1.3rem;">Mesclar Camadas</h3>
+            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 20px; line-height: 1.4;">
+                Você selecionou várias camadas. Qual deverá ser a <b>Cor Principal</b> em que elas serão unidas?
+            </p>
+            <div id="merge-choices-container" style="display:flex; flex-direction:column; gap:10px; max-height: 300px; overflow-y: auto;">
+                <!-- Botões gerados via JS -->
+            </div>
+            <button id="btn-cancel-merge" class="btn" style="margin-top: 20px; background: var(--surface-alt); color: white; border: 1px solid var(--border-color); box-shadow: none;">Cancelar</button>
+        </div>
+    </div>
+
     <div id="notification">Operação concluída!</div>
 
     <script>
         let extractedLayers = []; 
         let draggedItemIndex = null;
-        let currentSvgElement = null;
-        let svgNativeW = 1000;
-        let svgNativeH = 1000;
-        
-        let screenW = 1080;
-        let screenH = 1920;
-        let svgOffsetX = 0;
-        let svgOffsetY = 0;
-        let svgScale = 1;
-        let flipYAxis = false;
-        
-        const drawModes = ['hachura', 'contorno', 'completo'];
-        const drawModeLabels = { 'hachura': 'Hachura', 'contorno': 'Contorno', 'completo': 'Completo (H+C)' };
-        let globalDrawMode = 'hachura';
+        let selectedLayerIdsForMerge = new Set(); // Adicionado rastreador de camadas mescladas
 
         const colorDictionary = [
             { name: 'Preto', rgb: [0, 0, 0] }, { name: 'Branco', rgb: [255, 255, 255] },
@@ -303,6 +334,11 @@
         const btnGenerate = document.getElementById('btn-generate');
         const resolutionInput = document.getElementById('resolution');
         const btnGlobalMode = document.getElementById('btn-global-mode');
+        
+        const btnMergeLayers = document.getElementById('btn-merge-layers');
+        const mergeModal = document.getElementById('merge-modal');
+        const mergeChoicesContainer = document.getElementById('merge-choices-container');
+        const btnCancelMerge = document.getElementById('btn-cancel-merge');
 
         dropZone.addEventListener('click', () => fileInput.click());
         fileInput.addEventListener('change', handleFileSelect);
@@ -374,6 +410,9 @@
                 visible: true,
                 drawMode: globalDrawMode 
             }));
+
+            selectedLayerIdsForMerge.clear();
+            updateMergeButtonState();
 
             dropZone.innerHTML = `<p style="color: var(--success-color); font-weight: bold;">✓ ${filename} carregado</p><p style="font-size: 0.8em;">Clique para trocar</p>`;
             
@@ -525,6 +564,7 @@
                 li.className = `layer-item ${layer.visible ? '' : 'hidden-layer'}`;
                 li.draggable = true; li.dataset.index = index;
 
+                const isChecked = selectedLayerIdsForMerge.has(layer.id) ? 'checked' : '';
                 const bgColor = layer.color !== '' ? layer.color : '#000000';
                 const eyeClass = layer.visible ? 'btn-toggle-active' : '';
                 const eyeIcon = layer.visible ? 
@@ -536,6 +576,7 @@
 
                 li.innerHTML = `
                     <div class="drag-handle" title="Arraste para mover">⋮⋮</div>
+                    <input type="checkbox" class="layer-checkbox" title="Selecionar para Mesclar" ${isChecked}>
                     <div class="layer-order">${index + 1}</div>
                     <div class="color-swatch" style="background-color: ${bgColor};"></div>
                     <div class="layer-details">
@@ -554,6 +595,12 @@
                         <button class="layer-btn icon-only layer-toggle-btn ${eyeClass}" title="Ocultar/Exibir">${eyeIcon}</button>
                     </div>
                 `;
+
+                li.querySelector('.layer-checkbox').addEventListener('change', (e) => {
+                    if (e.target.checked) selectedLayerIdsForMerge.add(layer.id);
+                    else selectedLayerIdsForMerge.delete(layer.id);
+                    updateMergeButtonState();
+                });
 
                 li.querySelector('.layer-name-input').addEventListener('input', (e) => { extractedLayers[index].colorName = e.target.value; });
                 
@@ -606,6 +653,73 @@
 
                 layersList.appendChild(li);
             });
+        }
+
+        function updateMergeButtonState() {
+            if (selectedLayerIdsForMerge.size >= 2) {
+                btnMergeLayers.classList.remove('hidden');
+                btnMergeLayers.classList.add('btn-merge-active');
+                btnMergeLayers.textContent = `Mesclar (${selectedLayerIdsForMerge.size})`;
+            } else {
+                btnMergeLayers.classList.add('hidden');
+                btnMergeLayers.classList.remove('btn-merge-active');
+            }
+        }
+
+        btnMergeLayers.addEventListener('click', () => {
+            if (selectedLayerIdsForMerge.size < 2) return;
+            
+            mergeChoicesContainer.innerHTML = '';
+            
+            const selectedLayers = extractedLayers.filter(l => selectedLayerIdsForMerge.has(l.id));
+            
+            selectedLayers.forEach(layer => {
+                const btn = document.createElement('button');
+                btn.className = 'color-choice-btn';
+                btn.innerHTML = `
+                    <div class="color-swatch" style="background-color: ${layer.color}; width: 28px; height: 28px;"></div>
+                    <span style="font-weight: bold; font-size: 1rem;">${layer.colorName}</span>
+                    <span style="color: var(--text-secondary); font-size: 0.8rem; margin-left: auto;">${layer.paths.length} vetores</span>
+                `;
+                btn.addEventListener('click', () => executeMerge(layer.id));
+                mergeChoicesContainer.appendChild(btn);
+            });
+            
+            mergeModal.style.display = 'flex';
+        });
+
+        btnCancelMerge.addEventListener('click', () => {
+            mergeModal.style.display = 'none';
+        });
+
+        function executeMerge(targetLayerId) {
+            const targetLayer = extractedLayers.find(l => l.id === targetLayerId);
+            if (!targetLayer) return;
+
+            let vetoresAdicionados = 0;
+            const indicesParaRemover = [];
+
+            // Transfere os vetores das outras camadas selecionadas para a camada alvo
+            extractedLayers.forEach((layer, index) => {
+                if (selectedLayerIdsForMerge.has(layer.id) && layer.id !== targetLayerId) {
+                    targetLayer.paths.push(...layer.paths);
+                    vetoresAdicionados += layer.paths.length;
+                    indicesParaRemover.push(index);
+                }
+            });
+
+            // Remove as camadas que foram absorvidas (em ordem decrescente para não quebrar os índices)
+            indicesParaRemover.sort((a, b) => b - a).forEach(idx => {
+                extractedLayers.splice(idx, 1);
+            });
+
+            selectedLayerIdsForMerge.clear();
+            updateMergeButtonState();
+            mergeModal.style.display = 'none';
+
+            renderLayersList();
+            drawFastPreview();
+            showNotification(`${vetoresAdicionados} vetores fundidos na cor ${targetLayer.colorName}!`);
         }
 
         function drawFastPreview() {
