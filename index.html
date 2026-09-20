@@ -262,6 +262,14 @@
                         <!-- Itens gerados via JS -->
                     </ul>
 
+                    <!-- Novo campo para renomear o ZIP -->
+                    <div class="workspace-controls" style="margin-bottom: 12px; background: rgba(0,0,0,0.2);">
+                        <div class="control-group" style="width: 100%;">
+                            <label style="white-space: nowrap;">Nome do ZIP:</label>
+                            <input type="text" id="zip-filename" value="Meus_Desenhos" style="flex-grow: 1; text-align: left; padding: 6px 10px; border-radius: 4px; background: var(--bg-color); border: 1px solid var(--border-color); color: white; width: auto;">
+                        </div>
+                    </div>
+
                     <button id="btn-generate" class="btn btn-success">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                         Baixar Todas em ZIP (.zip)
@@ -354,6 +362,8 @@
         const mergeModal = document.getElementById('merge-modal');
         const mergeChoicesContainer = document.getElementById('merge-choices-container');
         const btnCancelMerge = document.getElementById('btn-cancel-merge');
+        
+        const inputZipFilename = document.getElementById('zip-filename');
 
         dropZone.addEventListener('click', () => fileInput.click());
         fileInput.addEventListener('change', handleFileSelect);
@@ -423,7 +433,8 @@
                 colorName: getColorName(color),
                 paths: colorGroups[color],
                 visible: true,
-                drawMode: globalDrawMode 
+                drawMode: globalDrawMode,
+                duration: 0
             }));
 
             selectedLayerIdsForMerge.clear();
@@ -594,9 +605,15 @@
                     <input type="checkbox" class="layer-checkbox" title="Selecionar para Mesclar" ${isChecked}>
                     <div class="layer-order">${index + 1}</div>
                     <div class="color-swatch" style="background-color: ${bgColor};"></div>
-                    <div class="layer-details">
-                        <input type="text" class="layer-name-input" value="${layer.colorName}" data-index="${index}" title="Renomeie a cor (altera o nome no arquivo/ZIP)">
-                        <div class="layer-stats">${layer.paths.length} vetor(es)</div>
+                    <div class="layer-details" style="flex-direction:row; align-items:center; gap:8px;">
+                        <div style="display:flex; flex-direction:column; flex-grow:1; gap:2px;">
+                            <input type="text" class="layer-name-input" value="${layer.colorName}" data-index="${index}" title="Renomeie a cor (altera o nome no arquivo/ZIP)">
+                            <div class="layer-stats">${layer.paths.length} vetor(es)</div>
+                        </div>
+                        <div style="display:flex; flex-direction:column; align-items:center;" title="Tempo total para desenhar a camada (0 = Automático)">
+                            <span style="font-size:0.65rem; color:var(--text-secondary);">Tempo (s)</span>
+                            <input type="number" class="layer-duration-input" value="${layer.duration || 0}" min="0" step="0.5" data-index="${index}" style="width:45px; background:#111; border:1px solid var(--border-color); color:var(--success-color); border-radius:4px; text-align:center; font-size:0.8rem; padding:2px;">
+                        </div>
                     </div>
                     <div class="layer-action-btns">
                         <button class="layer-btn layer-mode-toggle ${modeClass}" data-index="${index}" title="Modo de Desenho (Hachura/Contorno/Ambos)">
@@ -619,6 +636,8 @@
 
                 li.querySelector('.layer-name-input').addEventListener('input', (e) => { extractedLayers[index].colorName = e.target.value; });
                 
+                li.querySelector('.layer-duration-input').addEventListener('input', (e) => { extractedLayers[index].duration = parseFloat(e.target.value) || 0; });
+
                 li.querySelector('.layer-mode-toggle').addEventListener('click', () => {
                     const l = extractedLayers[index];
                     const nextIdx = (drawModes.indexOf(l.drawMode) + 1) % drawModes.length;
@@ -777,19 +796,13 @@
         }
 
         async function buildLayerScriptContent(layer, order, resolution) {
-            let scriptContent = `// Uny Automaton - Layer Extractor\n`;
-            scriptContent += `// Tela: ${screenW}x${screenH} | Escala: ${svgScale}x\n`;
-            scriptContent += `// Camada ${order}: ${layer.colorName} (${layer.color}) | Modo: ${drawModeLabels[layer.drawMode]}\n\n`;
-            scriptContent += `toastLog("Iniciando camada ${order}: ${layer.colorName} [${drawModeLabels[layer.drawMode]}]");\n\n`;
-
+            let layerTraces = [];
             const doHachura = (layer.drawMode === 'hachura' || layer.drawMode === 'completo');
             const doContorno = (layer.drawMode === 'contorno' || layer.drawMode === 'completo');
             const playSound = checkPlaySound.checked;
 
-            // Motor 1: HACHURA (Preenchimento)
+            // --- 1. HACHURA (Preenchimento ZigZag) ---
             if (doHachura) {
-                if (layer.drawMode === 'completo') scriptContent += `// --- 1. PREENCHIMENTO (HACHURA) ---\n`;
-                
                 const offCanvas = document.createElement('canvas');
                 offCanvas.width = Math.round(svgNativeW);
                 offCanvas.height = Math.round(svgNativeH);
@@ -854,21 +867,18 @@
                                 }
 
                                 if (ptsInLine.length >= 2) {
-                                    let duration = Math.max(80, ptsInLine.length * 4);
-                                    scriptContent += `gesture(${duration}, ${ptsInLine.join(', ')});\n`;
+                                    layerTraces.push(ptsInLine);
                                 }
                             });
                             scanningRight = !scanningRight; 
                         }
                     }
-                    scriptContent += `sleep(15);\n\n`;
                     if (j % 3 === 0) await new Promise(r => setTimeout(r, 10));
                 }
             }
 
-            // Motor 2: CONTORNO (Linhas Precisas)
+            // --- 2. CONTORNO (Linha Única Contínua) ---
             if (doContorno) {
-                if (layer.drawMode === 'completo') scriptContent += `// --- 2. CONTORNO EXTERNO ---\n`;
                 const stepLen = Math.max(1, resolution / 2.0); 
                 
                 for (let j = 0; j < layer.paths.length; j++) {
@@ -899,34 +909,102 @@
                     ptsInLine.push(`[${endX}, ${endY}]`);
 
                     if (ptsInLine.length >= 2) {
-                        const CHUNK_SIZE = 400; 
-                        for (let c = 0; c < ptsInLine.length; c += CHUNK_SIZE) {
-                            let chunk = ptsInLine.slice(c, c + CHUNK_SIZE + 1);
-                            if (chunk.length >= 2) {
-                                let duration = Math.floor(Math.max(100, chunk.length * 10) * 0.2); 
-                                if (duration < Math.max(80, chunk.length * 5)) duration = Math.max(80, chunk.length * 5);
-                                scriptContent += `gesture(${duration}, ${chunk.join(', ')});\n`;
-                            }
+                        const MAX_POINTS = 5000; 
+                        for (let c = 0; c < ptsInLine.length; c += MAX_POINTS) {
+                            let chunk = ptsInLine.slice(c, c + MAX_POINTS + 1);
+                            if (chunk.length >= 2) layerTraces.push(chunk);
                         }
-                        scriptContent += `sleep(25);\n\n`;
                     }
                     if (j % 5 === 0) await new Promise(r => setTimeout(r, 5)); 
                 }
             }
 
-            scriptContent += `toastLog("Camada ${order} concluída.");\n`;
+            let totalPts = layerTraces.reduce((sum, tr) => sum + tr.length, 0);
+            let userDurationMs = (layer.duration || 0) * 1000;
+
+            // --- 3. TEMPLATE IDÊNTICO AO SCRIPT DE REFERÊNCIA ---
+            let scriptContent = `// --- AUTO.JS VECTOR STUDIO ---
+// Uny Automaton - Layer Extractor
+// Camada ${order}: ${layer.colorName} (${layer.color}) | Modo: ${drawModeLabels[layer.drawMode]}
+// Continuidade de Traço Ativa: Sem quebras em segmentos!
+
+setScreenMetrics(${screenW}, ${screenH});
+
+var MULTIPLICADOR = 0.200;
+
+function desenharWarmup(pts) {
+    if(pts.length < 2) return;
+    var dur = Math.max(300, pts.length * 15);
+    gesture.apply(null, [dur].concat(pts));
+    sleep(200);
+}
+
+function desenharTraco(pts, userDur) {
+    if(pts.length < 2) return;
+    var dur;
+    if (userDur > 0) {
+        dur = userDur;
+    } else {
+        dur = Math.floor(Math.max(100, pts.length * 10) * MULTIPLICADOR);
+        if(dur < Math.max(80, pts.length * 5)) dur = Math.max(80, pts.length * 5);
+        if(dur > 60000) dur = 60000;
+    }
+    gesture.apply(null, [dur].concat(pts));
+    sleep(35);
+}
+
+var cam = [
+  { nome: "Pré-Traço Inicial (Anti-Bug)", isWarmup: true, del: 0, trs: [
+    [
+      [333,1225], [332,1225], [331,1225], [330,1225], [329,1225], [328,1225], [327,1225], [327,1224], [326,1224], [325,1224], [324,1224], [323,1224], [322,1224], [321,1224], [320,1224]
+    ]
+  ] },
+  { nome: "[${layer.colorName}] Camada ${order}", del: 0, userDurMs: ${userDurationMs}, totalPts: ${totalPts}, trs: [
+`;
+
+            let tracesStr = layerTraces.map(tr => `    [\n      ${tr.join(', ')}\n    ]`).join(',\n');
+            scriptContent += tracesStr;
+
+            scriptContent += `
+  ] }
+];
+
+// --- EXECUÇÃO PRINCIPAL ---
+for (var k = 0; k < cam.length; k++) {
+    var cmd = cam[k];
+    if (cmd.isWarmup) {
+        toast("Executando Pré-Traço...");
+        for (var t = 0; t < cmd.trs.length; t++) { desenharWarmup(cmd.trs[t]); }
+        continue;
+    }
+    if (cmd.del > 0) { toast("Espere " + (cmd.del/1000) + "s: " + cmd.nome); sleep(cmd.del); }
+    else { toastLog("A desenhar: " + cmd.nome); }
+
+    for (var t = 0; t < cmd.trs.length; t++) {
+        var currentTrace = cmd.trs[t];
+        var traceDur = 0;
+        if (cmd.userDurMs > 0 && cmd.totalPts > 0) {
+            traceDur = Math.max(10, Math.floor((currentTrace.length / cmd.totalPts) * cmd.userDurMs));
+        }
+        desenharTraco(currentTrace, traceDur);
+    }
+}
+toastLog("Camada ${order} Finalizada!");
+`;
 
             if (playSound) {
                 scriptContent += `
-// Tocar Notificação Sonora Auto.js
+// Notificação Sonora e Vibração (Auto.js)
+device.vibrate([0, 300, 100, 300]);
 try {
-    var uri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION);
-    var rt = android.media.RingtoneManager.getRingtone(context, uri);
-    rt.play();
-    device.vibrate(300);
+    var RingtoneManager = android.media.RingtoneManager;
+    var uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
+    var rt = RingtoneManager.getRingtone(context, uri);
+    if(rt) rt.play();
 } catch(e) {
     console.error("Erro ao tocar som: " + e);
 }
+sleep(2000); // Segura o script aberto para o som terminar de tocar
 \n`;
             }
 
@@ -993,8 +1071,13 @@ try {
                 progressText.textContent = "Compactando ZIP...";
                 const content = await zip.generateAsync({type:"blob"});
                 
+                // Pega o nome digitado pelo usuário
+                let zipName = inputZipFilename.value.trim();
+                if (!zipName) zipName = "Uny_Automaton_Scripts";
+                if (!zipName.toLowerCase().endsWith('.zip')) zipName += '.zip';
+                
                 const a = document.createElement("a"); a.href = URL.createObjectURL(content);
-                a.download = "Uny_Automaton_Scripts.zip"; document.body.appendChild(a);
+                a.download = zipName; document.body.appendChild(a);
                 a.click(); document.body.removeChild(a); URL.revokeObjectURL(a.href);
 
                 playSuccessBeep(); showNotification("ZIP gerado e baixado com sucesso!");
